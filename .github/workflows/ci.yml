@@ -9,16 +9,19 @@ on:
     branches:
       - main
 
+env:
+  IMAGE_NAME: gameflixauth-app:${{ github.sha }}
+
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
@@ -28,4 +31,41 @@ jobs:
         run: mvn clean package -DskipTests
 
       - name: Build Docker image
-        run: docker build -t gameflix-backend .
+        run: docker build -t "$IMAGE_NAME" .
+
+      - name: Install Syft
+        run: |
+          curl -sSfL https://get.anchore.io/syft |
+          sudo sh -s -- -b /usr/local/bin
+
+      - name: Generate CycloneDX SBOM
+        run: |
+          syft "$IMAGE_NAME" \
+            -o cyclonedx-json=gameflixauth-sbom.cdx.json
+
+      - name: Archive SBOM
+        uses: actions/upload-artifact@v7
+        with:
+          name: gameflixauth-sbom
+          path: gameflixauth-sbom.cdx.json
+
+      - name: Install Trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh |
+          sudo sh -s -- -b /usr/local/bin v0.76.2
+
+      - name: Report HIGH and CRITICAL vulnerabilities
+        run: |
+          trivy image \
+            --scanners vuln \
+            --severity HIGH,CRITICAL \
+            --exit-code 0 \
+            "$IMAGE_NAME"
+
+      - name: Fail build on CRITICAL vulnerabilities
+        run: |
+          trivy image \
+            --scanners vuln \
+            --severity CRITICAL \
+            --exit-code 1 \
+            "$IMAGE_NAME"
